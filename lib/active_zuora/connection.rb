@@ -2,7 +2,7 @@ module ActiveZuora
   class Connection
 
     attr_reader :soap_client
-    attr_accessor :custom_header
+    attr_accessor :custom_header, :wsdl
 
     WSDL = File.expand_path('../../../wsdl/zuora.wsdl', __FILE__)
 
@@ -10,10 +10,7 @@ module ActiveZuora
       # Store login credentials and create SOAP client.
       @username = configuration[:username]
       @password = configuration[:password]
-      @soap_client = Savon::Client.new do
-        wsdl.document = configuration[:wsdl] || WSDL
-        http.proxy = configuration[:http_proxy] if configuration[:http_proxy]
-      end
+      @wsdl = configuration[:wsdl] || WSDL
     end
 
     def login
@@ -21,10 +18,8 @@ module ActiveZuora
       # Instance variables aren't available within the soap request block.
       body = { :username => @username, :password => @password }
       header = @custom_header
-      @soap_client.request(:login) do
-        soap.body = body
-        soap.header = header
-      end[:login_response][:result][:session]
+      client = Savon.client(wsdl: @wsdl)
+      client.call(:login, message: { body: body, header: header})[:login_response][:result][:session]
     end
 
     def request(*args, &block)
@@ -32,11 +27,10 @@ module ActiveZuora
       header = { 'SessionHeader' => { 'session' => @session_id } }
       header.merge!(@custom_header) if @custom_header
 
-      @soap_client.request(*args) do
-        soap.header = header
-        yield(soap)
-      end
-    rescue Savon::SOAP::Fault => exception
+
+      client = Savon.client(wsdl: @wsdl)
+      client.call(*args, message: {header: header})
+    rescue Exception => exception
       # Catch invalid sessions, and re-issue the request.
       raise unless exception.message =~ /INVALID_SESSION/
       @session_id = login
